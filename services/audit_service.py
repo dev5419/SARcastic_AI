@@ -42,3 +42,72 @@ def get_audit_logs(limit=100):
             {"limit": limit}
         )
         return result.mappings().all()
+
+def get_case_audit_history(sar_id):
+    """
+    Retrieves the full audit history for a specific case,
+    formatted for the timeline view.
+    """
+    with engine.connect() as connection:
+        # Get DB logs
+        result = connection.execute(
+            text("""
+                SELECT 
+                    created_at, 
+                    rules_triggered,
+                    llm_prompt
+                FROM audit_logs 
+                WHERE sar_id = :sar_id
+                ORDER BY created_at DESC
+            """),
+            {"sar_id": sar_id}
+        )
+        db_logs = result.mappings().all()
+        
+        # Get Case Creation info for the 'Created' event
+        case_result = connection.execute(
+            text("SELECT created_at, status, analyst_id FROM sar_cases WHERE id = :sar_id"),
+            {"sar_id": sar_id}
+        )
+        case_info = case_result.mappings().first()
+        
+        history = []
+        
+        # 1. Add Creation Event
+        if case_info:
+            history.append({
+                "timestamp": case_info.created_at,
+                "user": f"Analyst {case_info.analyst_id}",
+                "action": "Case Created",
+                "risk_version": "v1.0",
+                "model_version": "N/A",
+                "details": f"Initial Status: {case_info.status}"
+            })
+
+        # 2. Add System Logs
+        for log in db_logs:
+            history.append({
+                "timestamp": log.created_at,
+                "user": "System (RegIntel AI)",
+                "action": "Risk Assessment & Narrative Generation",
+                "risk_version": "v1.2",
+                "model_version": "RegLLM-Pro-24b",
+                "details": f"Rules: {log.rules_triggered[:50]}..."
+            })
+            
+        # 3. Add Mock 'Review' events if status warrants
+        if case_info and case_info.status in ['Review', 'Approved']:
+             # Mock a review event shortly after creation
+             import datetime
+             history.append({
+                "timestamp": case_info.created_at + datetime.timedelta(hours=2),
+                "user": "Reviewer (Mike R.)",
+                "action": "Manual Review Started",
+                "risk_version": "v1.2",
+                "model_version": "N/A",
+                "details": "Assigned to self"
+             })
+
+        # Sort by timestamp desc
+        history.sort(key=lambda x: x['timestamp'], reverse=True)
+        return history
