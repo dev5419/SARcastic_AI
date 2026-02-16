@@ -1,0 +1,10 @@
+streamlit
+psycopg2-binary
+sqlalchemy
+langchain
+langchain-community
+ollama
+python-dotenv
+chromadb
+passlib[bcrypt]
+langchain-ollama
