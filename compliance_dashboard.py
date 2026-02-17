@@ -7,16 +7,158 @@ import time
 import os
 
 # --- Backend Integrations ---
-from services.sar_service import create_sar_case, get_all_cases, get_case_by_id, get_dashboard_metrics, generate_regulatory_report
-from services.audit_service import save_audit_log, get_audit_logs, get_case_audit_history
-from llm.narrative_generator import generate_sar_narrative
-from vectorstore.chroma_store import seed_regulatory_knowledge_base, retrieve_relevant_docs
+import requests
 
-# Try importing passlib for secure hashing (as per requirements)
-try:
-    from passlib.hash import pbkdf2_sha256
-except ImportError:
-    pbkdf2_sha256 = None
+# Connection Config
+API_URL = os.getenv("API_URL", "http://localhost:8000/api/v1")
+
+# Wrapper Functions to Bridge Frontend -> Backend API
+def get_token():
+    return st.session_state.get("token")
+
+def get_headers():
+    token = get_token()
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+def login_user(username, password):
+    try:
+        resp = requests.post(f"{API_URL}/auth/login", data={"username": username, "password": password})
+        if resp.status_code == 200:
+            return resp.json()
+        return None
+    except Exception as e:
+        print(f"Login Error: {e}")
+        return None
+
+def get_all_cases(limit=100):
+    try:
+        resp = requests.get(f"{API_URL}/cases/", params={"limit": limit}, headers=get_headers())
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        print(f"API Error: {e}")
+    return []
+
+def get_case_by_id(sar_id):
+    try:
+        resp = requests.get(f"{API_URL}/cases/{sar_id}", headers=get_headers())
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        print(f"Case fetch error: {e}")
+    return None
+
+def create_sar_case(analyst_id, data, generated_narrative):
+    kyc = data.get("kyc", {})
+    payload = {
+        "customer_name": kyc.get("full_name", "Unknown"),
+        "kyc_data": kyc,
+        "transaction_data": [{"raw": data.get("transactions", "")}]
+    }
+    try:
+        resp = requests.post(f"{API_URL}/cases/", json=payload, headers=get_headers())
+        if resp.status_code == 200:
+            return resp.json()['id']
+    except Exception as e:
+        print(f"Create Error: {e}")
+    return None
+
+def generate_sar_for_case(case_id):
+    """
+    Calls the backend to generate a detailed SAR narrative for the given case.
+    The backend invokes the LLM with RAG context and returns the full SAR.
+    """
+    try:
+        resp = requests.post(
+            f"{API_URL}/cases/{case_id}/generate_narrative",
+            headers=get_headers(),
+            timeout=120  # LLM generation can take time
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            error_detail = resp.json().get("detail", "Unknown error")
+            return {"error": error_detail}
+    except requests.exceptions.Timeout:
+        return {"error": "SAR generation timed out. The LLM may need more time."}
+    except Exception as e:
+        return {"error": str(e)}
+
+def get_dashboard_metrics():
+    try:
+        resp = requests.get(f"{API_URL}/dashboard/metrics", headers=get_headers())
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        print(f"Metrics Error: {e}")
+    return {
+        "sar_filed_month": 0,
+        "avg_time_to_file": 0,
+        "sla_breach_pct": 0.0,
+        "backlog_30_days": 0,
+        "continuing_sar": 0
+    }
+
+def generate_regulatory_report():
+    try:
+        resp = requests.get(f"{API_URL}/dashboard/report", headers=get_headers())
+        if resp.status_code == 200:
+            return resp.json().get('report', "")
+    except Exception as e:
+        print(f"Report Error: {e}")
+    return "Report generation failed — backend unreachable."
+
+def retrieve_relevant_docs(query):
+    try:
+        resp = requests.post(f"{API_URL}/dashboard/explain", json={"query": query}, headers=get_headers())
+        if resp.status_code == 200:
+            return resp.json().get('docs', [])
+    except Exception as e:
+        print(f"RAG Error: {e}")
+    return []
+
+def save_audit_log(sar_id, rules, prompt, response):
+    # Audit logging is handled automatically by the backend on write operations.
+    pass
+
+def get_audit_logs(limit=50):
+    try:
+        resp = requests.get(f"{API_URL}/dashboard/audit-logs", params={"limit": limit}, headers=get_headers())
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        print(f"Audit Logs Error: {e}")
+    return []
+
+def get_case_audit_history(sar_id):
+    try:
+        resp = requests.get(f"{API_URL}/cases/{sar_id}/audit", headers=get_headers())
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        print(f"Case Audit Error: {e}")
+    return []
+
+def upload_csv_case(file):
+    try:
+        files = {"file": (file.name, file, "text/csv")}
+        resp = requests.post(f"{API_URL}/cases/import-csv", headers=get_headers(), files=files)
+        if resp.status_code == 200:
+            return resp.json()
+        elif resp.status_code == 400:
+            try:
+                detail = resp.json().get('detail')
+            except:
+                detail = resp.text
+            return {"error": f"Validation Error: {detail}"}
+        else:
+            return {"error": f"Upload failed: {resp.status_code} {resp.text}"}
+    except Exception as e:
+        return {"error": f"Connection error: {str(e)}"}
+
+def seed_regulatory_knowledge_base():
+    pass  # Backend handles this on startup
+
 
 # -----------------------------------------------------------------------------
 # Page Configuration
@@ -24,7 +166,7 @@ except ImportError:
 st.set_page_config(
     page_title="RegIntel Compliance Suite",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 # Initialize Session State
@@ -42,78 +184,19 @@ if "kb_seeded" not in st.session_state:
         print(f"Vector Store Error: {e}")
 
 # -----------------------------------------------------------------------------
-# Database Connection Check
-# -----------------------------------------------------------------------------
-DB_CONNECTED = False
-try:
-    # simple check to see if we can query the DB
-    # We catch broad exceptions in case the engine isn't even configured in .env
-    cases = get_all_cases(limit=1)
-    DB_CONNECTED = True
-except Exception as e:
-    # Fail silently to console, show toast to user
-    print(f"DB Connection Warning: {e}")
-    # We will trigger a toast later so it doesn't disappear instantly
-
-# -----------------------------------------------------------------------------
 # Authentication Logic
 # -----------------------------------------------------------------------------
-DEMO_USERS = {
-    "admin@regintel.com": {"pass": "admin123", "role": "Compliance Head"},
-    "sarah@regintel.com": {"pass": "sarah123", "role": "Analyst"},
-    "mike@regintel.com": {"pass": "mike123", "role": "Senior Reviewer"},
-    "jane@regintel.com": {"pass": "jane123", "role": "MLRO"}
-}
-
 def verify_password(email, password):
-    if email in DEMO_USERS and DEMO_USERS[email]["pass"] == password:
-        return DEMO_USERS[email]
+    data = login_user(email, password)
+    if data:
+        st.session_state.token = data["access_token"]
+        return {"role": data.get("role", "Analyst")}
     return None
 
 # -----------------------------------------------------------------------------
 # Views
 # -----------------------------------------------------------------------------
-def render_dashboard():
-    # Header & Export Actions
-    h_c1, h_c2 = st.columns([2, 1])
-    with h_c1:
-        st.title("Compliance Dashboard")
-    with h_c2:
-        st.markdown('<div style="display: flex; gap: 10px; justify-content: flex-end; align-items: center; height: 100%;">', unsafe_allow_html=True)
-        # 1. Generate Regulatory Report (Backend)
-        report_text = generate_regulatory_report()
-        st.download_button(
-            "📄 Gen. Report",
-            data=report_text,
-            file_name=f"SAR_Summary_{datetime.date.today()}.txt",
-            mime="text/plain",
-            help="Generate Regulatory SAR Summary Report (Text)"
-        )
-        
-        # 2. Export Cases CSV (Frontend/Backend Logic)
-        try:
-             # CSV requires fetching all cases potentially
-             all_cases = get_all_cases(limit=1000)
-             csv_data = pd.DataFrame(all_cases).to_csv(index=False)
-             st.download_button(
-                 "📊 Export CSV",
-                 data=csv_data,
-                 file_name=f"cases_export_{datetime.date.today()}.csv",
-                 mime="text/csv"
-             )
-        except:
-             st.button("📊 Export CSV", disabled=True)
 
-        # 3. Export PDF (Mock)
-        if st.button("🖨️ PDF", help="Export Dashboard View as PDF"):
-             st.toast("Processing PDF Export... (Sent to print queue)", icon="🖨️")
-
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Check DB status
-    if not DB_CONNECTED and "db_toast_shown" not in st.session_state:
-        st.toast("🚨 Database connection failed. Some features may be limited.", icon="🚨")
-        st.session_state.db_toast_shown = True
 
 # -----------------------------------------------------------------------------
 # Login View
@@ -174,7 +257,7 @@ def load_design_system():
         .badge-open { background-color: rgba(201, 162, 39, 0.2); color: #C9A227; }
         .stButton button { background-color: var(--primary-gold); color: #0B1F3A; border: none; border-radius: 6px; font-weight: 600; }
         .stButton button:hover { background-color: #E3B42A; color: #000000; }
-        #MainMenu, footer, header {visibility: hidden;}
+        #MainMenu, footer {visibility: hidden;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -191,13 +274,10 @@ def kpi_card(title, value, trend=None, trend_direction="up"):
     st.markdown(f'<div class="kpi-card"><div class="kpi-title">{title}</div><div class="kpi-value">{value}</div>{trend_html}</div>', unsafe_allow_html=True)
 
 def risk_chart(data=None):
-    if data is None:
-        # Fallback/Demo Data
-        data = pd.DataFrame({
-            'Risk Level': ['Low Risk', 'Medium Risk', 'High Risk', 'Critical'],
-            'Cases': [450, 210, 85, 25]
-        })
-    
+    if data is None or data.empty:
+        st.info("No risk data available.")
+        return
+
     base = alt.Chart(data).encode(
         theta=alt.Theta("Cases", stack=True),
         radius=alt.Radius("Cases", scale=alt.Scale(type="sqrt", zero=True, rangeMin=20)),
@@ -212,80 +292,62 @@ def risk_chart(data=None):
     st.altair_chart((pie + text).properties(height=250), use_container_width=True)
 
 def case_aging_heatmap(cases_data=None):
-    data = None
-    
-    if cases_data:
-        # Process real data
-        # Assume cases_data is a list of dicts with 'created_at' and 'risk_level'
-        # We need to calculate age in days
-        now = datetime.datetime.now()
-        processed_rows = []
-        
-        for case in cases_data:
-            created_at = case.get('created_at')
-            risk = case.get('risk_level', 'Medium')
-            
-            if created_at:
-                if isinstance(created_at, str):
-                    # formatting might vary, but let's assume iso or simple date
+    if not cases_data:
+        st.info("No case data for aging heatmap.")
+        return
+
+    now = datetime.datetime.now()
+    processed_rows = []
+
+    for case in cases_data:
+        created_at = case.get('created_at')
+        risk = case.get('risk_level', 'Medium')
+
+        if created_at:
+            if isinstance(created_at, str):
+                try:
+                    c_date = datetime.datetime.fromisoformat(created_at)
+                except:
                     try:
                         c_date = datetime.datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S.%f")
                     except:
                         try:
-                             c_date = datetime.datetime.strptime(created_at, "%Y-%m-%d")
+                            c_date = datetime.datetime.strptime(created_at, "%Y-%m-%d")
                         except:
-                             c_date = now # Fallback
-                else:
-                    c_date = created_at
-                
-                days_old = (now - c_date).days
-                
-                bucket = "60+ Days"
-                if days_old <= 7: bucket = "0-7 Days"
-                elif days_old <= 15: bucket = "8-15 Days"
-                elif days_old <= 30: bucket = "16-30 Days"
-                elif days_old <= 60: bucket = "31-60 Days"
-                
-                processed_rows.append({"Risk": risk, "Bucket": bucket})
-        
-        if processed_rows:
-            df = pd.DataFrame(processed_rows)
-            data = df.groupby(['Risk', 'Bucket']).size().reset_index(name='Count')
+                            continue
+            else:
+                c_date = created_at
 
-    if data is None or data.empty:
-        # Fallback/Demo Data
-        data = pd.DataFrame([
-            {"Risk": "High", "Bucket": "0-7 Days", "Count": 5},
-            {"Risk": "High", "Bucket": "8-15 Days", "Count": 12},
-            {"Risk": "High", "Bucket": "16-30 Days", "Count": 8},
-            {"Risk": "High", "Bucket": "31-60 Days", "Count": 4},
-            {"Risk": "High", "Bucket": "60+ Days", "Count": 2},
-            {"Risk": "Medium", "Bucket": "0-7 Days", "Count": 15},
-            {"Risk": "Medium", "Bucket": "8-15 Days", "Count": 10},
-            {"Risk": "Medium", "Bucket": "16-30 Days", "Count": 5},
-            {"Risk": "Medium", "Bucket": "31-60 Days", "Count": 1},
-            {"Risk": "Medium", "Bucket": "60+ Days", "Count": 0},
-            {"Risk": "Low", "Bucket": "0-7 Days", "Count": 25},
-            {"Risk": "Low", "Bucket": "8-15 Days", "Count": 15},
-            {"Risk": "Low", "Bucket": "16-30 Days", "Count": 2},
-            {"Risk": "Low", "Bucket": "31-60 Days", "Count": 0},
-            {"Risk": "Low", "Bucket": "60+ Days", "Count": 0},
-        ])
+            days_old = (now - c_date).days
 
-    # Ensure correct ordering of buckets and risk
+            bucket = "60+ Days"
+            if days_old <= 7: bucket = "0-7 Days"
+            elif days_old <= 15: bucket = "8-15 Days"
+            elif days_old <= 30: bucket = "16-30 Days"
+            elif days_old <= 60: bucket = "31-60 Days"
+
+            processed_rows.append({"Risk": risk, "Bucket": bucket})
+
+    if not processed_rows:
+        st.info("No aging data to display.")
+        return
+
+    df = pd.DataFrame(processed_rows)
+    data = df.groupby(['Risk', 'Bucket']).size().reset_index(name='Count')
+
     bucket_order = ["0-7 Days", "8-15 Days", "16-30 Days", "31-60 Days", "60+ Days"]
     risk_order = ["Low", "Medium", "High", "Critical"]
-    
+
     base = alt.Chart(data).encode(
         x=alt.X('Bucket', sort=bucket_order, title="Aging Bucket", axis=alt.Axis(labelAngle=0)),
         y=alt.Y('Risk', sort=risk_order, title="Risk Level"),
     )
-    
+
     heatmap = base.mark_rect().encode(
         color=alt.Color('Count', scale=alt.Scale(range=['#1E3A5F', '#C9A227']), title="Case Count"),
         tooltip=['Risk', 'Bucket', 'Count']
     )
-    
+
     text = base.mark_text(baseline='middle').encode(
         text='Count',
         color=alt.condition(
@@ -294,33 +356,28 @@ def case_aging_heatmap(cases_data=None):
             alt.value('white')
         )
     )
-    
+
     st.altair_chart((heatmap + text).properties(height=250), use_container_width=True)
 
 def funnel_chart(df=None):
-    if df is not None and not df.empty:
-        cases_opened = len(df)
-        # Investigations: Review, Pending Review, High Risk Open
-        investigations = len(df[df['status'].isin(['Review', 'Pending Review', 'Escalated'])])
-        # SAR Drafted: Draft, Pending Review
-        sar_drafted = len(df[df['status'].isin(['Draft', 'Pending Review'])])
-        # SAR Filed: Approved, Filed, Closed (assuming closed means done)
-        sar_filed = len(df[df['status'].isin(['Approved', 'Filed'])])
-        
-        # Simulating upstream alerts
-        alerts_generated = int(cases_opened * 2.5) 
-    else:
-        # Falls back to standard funnel shape if no data
-        alerts_generated = 1250
-        cases_opened = 420
-        investigations = 280
-        sar_drafted = 150
-        sar_filed = 85
+    if df is None or df.empty:
+        st.info("No data for funnel chart.")
+        return
+
+    cases_opened = len(df)
+    investigations = len(df[df['status'].isin(['Review', 'Pending Review', 'Escalated'])])
+    sar_drafted = len(df[df['status'].isin(['Draft', 'Pending Review'])])
+    sar_filed = len(df[df['status'].isin(['Approved', 'Filed'])])
+    alerts_generated = int(cases_opened * 2.5)
+
+    if alerts_generated == 0:
+        st.info("No funnel data.")
+        return
 
     funnel_data = pd.DataFrame({
         'Stage': ['Alerts Generated', 'Cases Opened', 'Investigations', 'SAR Drafted', 'SAR Filed'],
         'Value': [alerts_generated, cases_opened, investigations, sar_drafted, sar_filed],
-        'SortColor': ['#2A3F55', '#2A3F55', '#2A3F55', '#C9A227', '#0D9488'] 
+        'SortColor': ['#2A3F55', '#2A3F55', '#2A3F55', '#C9A227', '#0D9488']
     })
 
     base = alt.Chart(funnel_data).encode(
@@ -336,7 +393,7 @@ def funnel_chart(df=None):
     text_value = base.mark_text(align='left', dx=5, color='#FFFFFF', fontWeight=600).encode(
         text='Value'
     )
-    
+
     text_label = base.mark_text(align='right', dx=-5, color='#B0B8C1').encode(
         text='Stage'
     )
@@ -345,50 +402,43 @@ def funnel_chart(df=None):
 
 def render_lifecycle_progress(current_status):
     stages = ["Alert Generated", "Under Review", "Escalated", "SAR Drafted", "Filed", "Closed"]
-    
-    # Map status to stage index
+
     status_map = {
         "Open": 0,
         "Review": 1, "Pending Review": 1,
-        "High": 2, "Critical": 2, # Assuming high risk might imply escalation if checking risk
+        "High": 2, "Critical": 2,
         "Escalated": 2,
         "Draft": 3,
         "Approved": 4, "Filed": 4,
         "Closed": 5
     }
-    
+
     current_idx = status_map.get(current_status, 0)
-    
-    # HTML Construction
+
     html = '<div style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0;">'
-    
+
     for i, stage in enumerate(stages):
-        # Determine styling based on state
         if i < current_idx:
-            # Completed
-            color = "#0D9488" # Teal
+            color = "#0D9488"
             icon = "✓"
             weight = "600"
             opacity = "1"
         elif i == current_idx:
-            # Active
-            color = "#C9A227" # Gold
+            color = "#C9A227"
             icon = "●"
             weight = "700"
             opacity = "1"
         else:
-            # Pending
-            color = "#2A3F55" # Muted Blue/Grey
+            color = "#2A3F55"
             icon = "○"
             weight = "400"
             opacity = "0.6"
-            
-        # Draw line logic (except for last item)
+
         line = ""
         if i < len(stages) - 1:
             line_color = "#0D9488" if i < current_idx else "#2A3F55"
             line = f'<div style="flex-grow: 1; height: 2px; background-color: {line_color}; margin: 0 10px;"></div>'
-            
+
         step_html = f'''
         <div style="display: flex; flex-direction: column; align-items: center; min-width: 60px;">
             <div style="color: {color}; font-size: 1.2rem; margin-bottom: 5px;">{icon}</div>
@@ -397,139 +447,124 @@ def render_lifecycle_progress(current_status):
         {line}
         '''
         html += step_html
-        
+
     html += '</div>'
     st.markdown(html, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# Views
+# Dialog Views
 # -----------------------------------------------------------------------------
 
 @st.dialog("Audit Trail & Timeline")
 def handle_audit_view(case_id, row_data):
     st.markdown(f"**Case ID:** `{case_id}`")
-    
-    # Lifecycle Progress Bar
+
     current_status = row_data.get('Status', 'Open')
     render_lifecycle_progress(current_status)
-    
-    st.markdown("---")
-    
-    # Timeline
-    try:
-        # DB available?
-        history = []
-        if DB_CONNECTED:
-            # Need numeric ID for query? Assuming input ID is string 'CAS-XXXX' or int
-            # Our mock data uses 'CAS-XXXX' but real DB returns integers usually.
-            # Let's try to parse if needed.
-            try:
-                numeric_id = int(str(case_id).replace('CAS-', ''))
-            except:
-                numeric_id = case_id
-            
-            history = get_case_audit_history(numeric_id)
-        
-        if not history:
-             # Simulation Fallback
-             base_time = datetime.datetime.now()
-             history = [
-                 {"timestamp": base_time, "user": "System", "action": "Risk Score Updated (High)", "risk_version": "v2.1", "model_version": "FinBERT-Reg-v4"},
-                 {"timestamp": base_time - datetime.timedelta(hours=2), "user": "Sarah J.", "action": "Manual Review Started", "risk_version": "v2.0", "model_version": "-"},
-                 {"timestamp": base_time - datetime.timedelta(hours=5), "user": "System", "action": "Case Auto-Created", "risk_version": "v2.0", "model_version": "RuleEngine-v12"}
-             ]
 
-        # Render Timeline
-        for event in history:
-            with st.container():
-                c1, c2 = st.columns([1, 4])
-                with c1:
-                    st.caption(event['timestamp'].strftime("%H:%M") if isinstance(event['timestamp'], datetime.datetime) else str(event['timestamp']))
-                    st.caption(event['timestamp'].strftime("%Y-%m-%d") if isinstance(event['timestamp'], datetime.datetime) else "")
-                with c2:
-                    st.markdown(f"**{event['action']}**")
-                    st.markdown(f"User: `{event['user']}` | Model: `{event.get('model_version', 'N/A')}`")
-                    st.markdown(f"Risk Version: `{event.get('risk_version', 'N/A')}`")
-                    if event.get('details'):
-                        with st.expander("Details"):
-                            st.text(event['details'])
-                st.divider()
+    st.markdown("---")
+
+    try:
+        # Parse case_id to numeric if needed
+        try:
+            numeric_id = int(str(case_id).replace('CAS-', ''))
+        except:
+            numeric_id = case_id
+
+        history = get_case_audit_history(numeric_id)
+
+        if not history:
+            st.info("No audit history found for this case.")
+        else:
+            for event in history:
+                with st.container():
+                    c1, c2 = st.columns([1, 4])
+                    with c1:
+                        ts = event.get('timestamp', '')
+                        if isinstance(ts, datetime.datetime):
+                            st.caption(ts.strftime("%H:%M"))
+                            st.caption(ts.strftime("%Y-%m-%d"))
+                        else:
+                            st.caption(str(ts))
+                    with c2:
+                        st.markdown(f"**{event.get('action', 'N/A')}**")
+                        st.markdown(f"User: `{event.get('user', 'N/A')}` | Model: `{event.get('model_version', 'N/A')}`")
+                        st.markdown(f"Risk Version: `{event.get('risk_version', 'N/A')}`")
+                        if event.get('details'):
+                            with st.expander("Details"):
+                                st.text(event['details'])
+                    st.divider()
 
     except Exception as e:
         st.error(f"Could not load history: {e}")
-        
+
     # Role-Based Action: Filing Controls
     user_role = st.session_state.get('user_role', 'Analyst')
     if user_role not in ['Analyst']:
-         st.markdown("### Actions")
-         c_act1, c_act2 = st.columns(2)
-         with c_act1:
-             if st.button("✅ Approve & File SAR", type="primary", use_container_width=True):
-                 st.toast(f"SAR {case_id} Filed with FinCEN by {user_role}", icon="✅")
-         with c_act2:
-             if st.button("↩️ Return for Rework", use_container_width=True):
-                 st.toast(f"SAR {case_id} returned to Analyst", icon="↩️")
+        st.markdown("### Actions")
+        c_act1, c_act2 = st.columns(2)
+        with c_act1:
+            if st.button("✅ Approve & File SAR", type="primary", use_container_width=True):
+                st.toast(f"SAR {case_id} Filed with FinCEN by {user_role}", icon="✅")
+        with c_act2:
+            if st.button("↩️ Return for Rework", use_container_width=True):
+                st.toast(f"SAR {case_id} returned to Analyst", icon="↩️")
     else:
-         st.info("ℹ️ Filing controls are restricted to Reviewers and MLROs.")
+        st.info("ℹ️ Filing controls are restricted to Reviewers and MLROs.")
 
 @st.dialog("Risk Analysis Breakdown")
 def handle_risk_view(case_id, row_data):
     st.markdown(f"### Case: `{case_id}`")
-    
-    # Mock Risk Data
+
     risk_level = row_data.get('Risk', 'High')
     risk_score = 88 if risk_level == 'High' else (65 if risk_level == 'Medium' else 25)
     confidence = 0.94
-    
-    # 1. Top Scores
+
     c1, c2, c3 = st.columns(3)
     with c1: st.metric("Risk Score", f"{risk_score}/100", delta="Critical" if risk_score > 80 else "Normal", delta_color="inverse")
     with c2: st.metric("Model Confidence", f"{int(confidence*100)}%")
     with c3: st.metric("Typologies Matches", "2")
 
     st.markdown("---")
-    
-    # 2. Feature Contributions (Altair)
+
     st.caption("Feature Contribution to Risk Score")
     feat_data = pd.DataFrame({
         'Feature': ['Structured Cash', 'Velocity > 3 Days', 'High Risk Geo', 'New Account', 'Round Amounts'],
         'Impact': [35, 25, 15, 10, 5]
     })
-    
+
     bar_chart = alt.Chart(feat_data).encode(
         x=alt.X('Impact', title='Contribution Points'),
         y=alt.Y('Feature', sort='-x', title=None),
         color=alt.Color('Impact', scale=alt.Scale(scheme='reds'), legend=None),
         tooltip=['Feature', 'Impact']
     ).mark_bar().properties(height=200)
-    
+
     st.altair_chart(bar_chart, use_container_width=True)
-    
-    # 3. Rules & Typologies
+
     c_left, c_right = st.columns(2)
     with c_left:
         st.markdown("**Triggered Rules**")
         st.warning("⚠️ R-102: Cumulative Cash > $10k")
         st.warning("⚠️ R-205: Rapid Movement of Funds")
         st.info("ℹ️ R-001: KYC Update Recent")
-        
+
     with c_right:
         st.markdown("**Suspected Typologies**")
         st.markdown("- **Structuring / Smurfing** (95% Match)")
         st.markdown("- **Money Laundering** (70% Match)")
 
-    # Role-Based Action: Override Risk
     user_role = st.session_state.get('user_role', 'Analyst')
     if user_role in ['MLRO', 'Compliance Head']:
         st.markdown("---")
         st.markdown("🔒 **MLRO Controls**")
         c_risk, c_btn = st.columns([3, 1])
         with c_risk:
-             new_risk = st.selectbox("Override Risk Level", ["Low", "Medium", "High", "Critical"], index=2, key=f"risk_override_{case_id}")
+            new_risk = st.selectbox("Override Risk Level", ["Low", "Medium", "High", "Critical"], index=2, key=f"risk_override_{case_id}")
         with c_btn:
-             st.markdown("<br>", unsafe_allow_html=True)
-             if st.button("Update Risk"):
-                 st.toast(f"Risk updated to {new_risk} by {user_role}", icon="🛡️")
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("Update Risk"):
+                st.toast(f"Risk updated to {new_risk} by {user_role}", icon="🛡️")
 
 def render_dashboard():
     # Header & Export Actions
@@ -538,7 +573,6 @@ def render_dashboard():
         st.title("Compliance Dashboard")
     with h_c2:
         st.markdown('<div style="display: flex; gap: 10px; justify-content: flex-end; align-items: center; height: 100%;">', unsafe_allow_html=True)
-        # 1. Generate Regulatory Report (Backend)
         report_text = generate_regulatory_report()
         st.download_button(
             "📄 Gen. Report",
@@ -547,31 +581,26 @@ def render_dashboard():
             mime="text/plain",
             help="Generate Regulatory SAR Summary Report (Text)"
         )
-        
-        # 2. Export Cases CSV (Frontend/Backend Logic)
-        try:
-             # CSV requires fetching all cases potentially
-             all_cases = get_all_cases(limit=1000)
-             csv_data = pd.DataFrame(all_cases).to_csv(index=False)
-             st.download_button(
-                 "📊 Export CSV",
-                 data=csv_data,
-                 file_name=f"cases_export_{datetime.date.today()}.csv",
-                 mime="text/csv"
-             )
-        except:
-             st.button("📊 Export CSV", disabled=True)
 
-        # 3. Export PDF (Mock)
+        try:
+            all_cases = get_all_cases(limit=1000)
+            if all_cases:
+                csv_data = pd.DataFrame(all_cases).to_csv(index=False)
+                st.download_button(
+                    "📊 Export CSV",
+                    data=csv_data,
+                    file_name=f"cases_export_{datetime.date.today()}.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.button("📊 Export CSV", disabled=True)
+        except:
+            st.button("📊 Export CSV", disabled=True)
+
         if st.button("🖨️ PDF", help="Export Dashboard View as PDF"):
-             st.toast("Processing PDF Export... (Sent to print queue)", icon="🖨️")
+            st.toast("Processing PDF Export... (Sent to print queue)", icon="🖨️")
 
         st.markdown('</div>', unsafe_allow_html=True)
-    
-    # Check DB status
-    if not DB_CONNECTED and "db_toast_shown" not in st.session_state:
-        st.toast("⚠️ Database disconnected. Using Simulation Mode.", icon="⚠️")
-        st.session_state.db_toast_shown = True
 
     # -------------------------------------------------------------------------
     # Global Filters
@@ -583,86 +612,63 @@ def render_dashboard():
         with f_c2:
             risk_filter = st.multiselect("Risk Level", ["High", "Medium", "Low"], default=["High", "Medium", "Low"])
         with f_c3:
-            # Mock Analysts for filter as user table isn't joined yet
-            analyst_filter = st.multiselect("Analyst", ["Sarah J.", "Mike R.", "David C.", "System"], default=[]) 
+            analyst_filter = st.multiselect("Analyst", ["Sarah J.", "Mike R.", "David C.", "System"], default=[])
         with f_c4:
             typology_filter = st.multiselect("Typology", ["Structuring", "Money Laundering", "Human Trafficking"], default=[])
         with f_c5:
-            status_filter = st.multiselect("Status", ["Open", "Review", "Closed", "Approved", "Draft"], default=["Open", "Review", "Draft"])
-        
+            status_filter = st.multiselect("Status", ["Open", "Review", "Closed", "Approved", "Draft", "Filed", "Pending Review"], default=["Open", "Review", "Draft"])
+
         apply_filters = st.button("Apply Filters", type="primary")
 
     # -------------------------------------------------------------------------
-    # Data Fetching & Processing
+    # Data Fetching — ALWAYS from Database via Backend API
     # -------------------------------------------------------------------------
-    if not DB_CONNECTED:
-        # SIMULATION DATA GENERATION (Used when DB is down)
-        # This replaces the static mock data to allow filters to "work" visually
-        mock_data = []
-        base_date = datetime.datetime.now()
-        analysts = ["Sarah J.", "Mike R.", "David C."]
-        risks = ["High", "Medium", "Low"]
-        statuses = ["Open", "Review", "Closed"]
-        
-        for i in range(50):
-            mock_data.append({
-                "id": f"CAS-{2940+i}",
-                "customer_name": f"Customer {i}",
-                "status": statuses[i % 3],
-                "risk_level": risks[i % 3],
-                "created_at": base_date - datetime.timedelta(days=i*2),
-                "analyst_id": (i % 3) + 1,
-                "analyst_name": analysts[i % 3], # Helpers
-                "generated_narrative": "continuing activity detected" if i % 5 == 0 else "standard review",
-                "typology": "Structuring" if i % 2 == 0 else "Money Laundering"
-            })
-        df = pd.DataFrame(mock_data)
-        
-    else:
-        # REAL DATA FETCHING
-        try:
-            cases = get_all_cases(limit=1000)
+    try:
+        cases = get_all_cases(limit=1000)
+        if cases:
             df = pd.DataFrame(cases)
-            # Map Analyst IDs to Names (Mock mapping for now as we don't have user table joined)
-            analyst_map = {1: "Sarah J.", 2: "Mike R.", 3: "David C."}
+            # Map Analyst IDs to Names
+            analyst_map = {1: "Admin", 2: "Sarah J.", 3: "Mike R.", 4: "Jane M.", 5: "David C.", 6: "Emma L.", 7: "Lucas R.", 8: "System", 9: "Test User", 10: "Auditor"}
             if not df.empty:
-                df['analyst_name'] = df['analyst_id'].map(analyst_map).fillna("System")
-                # Typology extraction mock (real extraction would parse narrative)
-                df['typology'] = df['generated_narrative'].apply(lambda x: "Structuring" if "structuring" in str(x).lower() else ("Money Laundering" if "laundering" in str(x).lower() else "General"))
-        except Exception as e:
-            st.error(f"Error fetching data: {e}")
+                df['analyst_name'] = df['analyst_id'].map(analyst_map).fillna("Unknown")
+                df['typology'] = df['generated_narrative'].apply(
+                    lambda x: "Structuring" if "structuring" in str(x).lower() else (
+                        "Money Laundering" if "laundering" in str(x).lower() else "General"
+                    )
+                )
+        else:
             df = pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
+        df = pd.DataFrame()
+
+    if df.empty:
+        st.warning("No cases found in the database. Create cases via Case Management.")
+        return
 
     # -------------------------------------------------------------------------
     # Filter Logic
     # -------------------------------------------------------------------------
-    if not df.empty:
-        # Date Filter
-        if len(date_range) == 2:
-            start_date, end_date = date_range
-            # Ensure created_at is datetime
-            if not pd.api.types.is_datetime64_any_dtype(df['created_at']):
-                 df['created_at'] = pd.to_datetime(df['created_at'])
-            
-            mask = (df['created_at'].dt.date >= start_date) & (df['created_at'].dt.date <= end_date)
-            df = df.loc[mask]
+    if len(date_range) == 2:
+        start_date, end_date = date_range
+        if not pd.api.types.is_datetime64_any_dtype(df['created_at']):
+            df['created_at'] = pd.to_datetime(df['created_at'])
 
-        # Dropdown Filters
-        if risk_filter:
-            df = df[df['risk_level'].isin(risk_filter)]
-        if analyst_filter:
-            df = df[df['analyst_name'].isin(analyst_filter)]
-        if typology_filter: 
-             # Basic substring match simulation for typology
-             df = df[df['typology'].isin(typology_filter)]
-        if status_filter:
-            df = df[df['status'].isin(status_filter)]
+        mask = (df['created_at'].dt.date >= start_date) & (df['created_at'].dt.date <= end_date)
+        df = df.loc[mask]
+
+    if risk_filter:
+        df = df[df['risk_level'].isin(risk_filter)]
+    if analyst_filter:
+        df = df[df['analyst_name'].isin(analyst_filter)]
+    if typology_filter:
+        df = df[df['typology'].isin(typology_filter)]
+    if status_filter:
+        df = df[df['status'].isin(status_filter)]
 
     # -------------------------------------------------------------------------
-    # KPIs Calculation (Dynamic)
+    # KPIs Calculation (Dynamic from real data)
     # -------------------------------------------------------------------------
-    
-    # Defaults
     metrics = {
         "sar_filed_month": 0,
         "avg_time_to_file": 0,
@@ -672,77 +678,70 @@ def render_dashboard():
     }
 
     if not df.empty:
+        if not pd.api.types.is_datetime64_any_dtype(df['created_at']):
+            df['created_at'] = pd.to_datetime(df['created_at'])
+
         current_month = datetime.datetime.now().month
         current_year = datetime.datetime.now().year
-        
-        # SAR Filed Month (Count rows created this month)
+
         metrics["sar_filed_month"] = len(df[
-            (df['created_at'].dt.month == current_month) & 
+            (df['created_at'].dt.month == current_month) &
             (df['created_at'].dt.year == current_year)
         ])
-        
-        # Avg Time to File (Mocked calculation: random variation based on row count)
-        # Real logic would need 'closed_at' which isn't in schema yet
-        metrics["avg_time_to_file"] = round(12.5 + (len(df) % 3), 1)
 
-        # SLA Breach (Open > 30 days)
         now = pd.Timestamp.now()
         breaches = df[
-            (df['status'] != 'Closed') & 
+            (df['status'] != 'Closed') &
             (df['status'] != 'Approved') &
+            (df['status'] != 'Filed') &
             (df['created_at'] < (now - pd.Timedelta(days=30)))
         ]
         metrics["backlog_30_days"] = len(breaches)
         if len(df) > 0:
             metrics["sla_breach_pct"] = round((len(breaches) / len(df)) * 100, 1)
-        
-        # Continuing SARs
+
         if 'generated_narrative' in df.columns:
             continuing = df[df['generated_narrative'].astype(str).str.contains('continuing', case=False, na=False)]
             metrics["continuing_sar"] = len(continuing)
 
-    # 0. Top Level KPIs (Rendered)
+    # 0. Top Level KPIs
     t_c1, t_c2, t_c3, t_c4, t_c5 = st.columns(5)
-    with t_c1: kpi_card("SAR Filed (Period)", f"{metrics['sar_filed_month']}", "+12%", "good")
-    with t_c2: kpi_card("Avg File Time", f"{metrics['avg_time_to_file']} Days", "-1.5 Days", "good")
-    with t_c3: kpi_card("SLA Breach %", f"{metrics['sla_breach_pct']}%", "+0.5%", "bad")
-    with t_c4: kpi_card("Backlog > 30 Days", f"{metrics['backlog_30_days']}", "-2", "good")
-    with t_c5: kpi_card("Continuing SARs", f"{metrics['continuing_sar']}", "+3", "bad")
+    with t_c1: kpi_card("SAR Filed (Period)", f"{metrics['sar_filed_month']}")
+    with t_c2: kpi_card("Avg File Time", f"{metrics['avg_time_to_file']} Days")
+    with t_c3: kpi_card("SLA Breach %", f"{metrics['sla_breach_pct']}%")
+    with t_c4: kpi_card("Backlog > 30 Days", f"{metrics['backlog_30_days']}")
+    with t_c5: kpi_card("Continuing SARs", f"{metrics['continuing_sar']}")
 
     st.markdown("<div style='margin-bottom: 20px'></div>", unsafe_allow_html=True)
-    
-    # 1. Metrics (Second Row - Aggregates from Filtered Data)
+
+    # 1. Metrics (Second Row)
     total_cases_count = len(df)
     high_risk_count = len(df[df['risk_level'] == 'High'])
     pending_count = len(df[df['status'].isin(['Review', 'Pending Review'])])
-    flagged_count = len(df[df['risk_level'].isin(['High', 'Critical'])]) # Proxy
+    flagged_count = len(df[df['risk_level'].isin(['High', 'Critical'])])
 
     col1, col2, col3, col4 = st.columns(4)
-    with col1: kpi_card("Total Cases", f"{total_cases_count}", None, "good")
-    with col2: kpi_card("High Risk Cases", f"{high_risk_count}", None, "bad")
-    with col3: kpi_card("Pending Review", f"{pending_count}", None, "good")
-    with col4: kpi_card("Flagged Alerts", f"{flagged_count}", None, "bad")
+    with col1: kpi_card("Total Cases", f"{total_cases_count}")
+    with col2: kpi_card("High Risk Cases", f"{high_risk_count}")
+    with col3: kpi_card("Pending Review", f"{pending_count}")
+    with col4: kpi_card("Flagged Alerts", f"{flagged_count}")
 
     st.write("")
-    
+
     # 2. Charts & Activity
     m_col1, m_col2 = st.columns([2, 1])
     with m_col1:
         st.markdown('<div class="content-card"><div class="card-header">Recent Activity</div>', unsafe_allow_html=True)
-        
+
         if not df.empty:
-            # Display Table with limited columns
             display_df = df[['id', 'analyst_name', 'risk_level', 'status', 'created_at']].copy()
             display_df.columns = ['ID', 'Analyst', 'Risk', 'Status', 'Date']
-            
-            # Add Action Column for "View Risk Breakdown"
+
             display_df['Risk Breakdown'] = False
-            # Add Action Column for "Audit View"
             display_df['Audit View'] = False
-            
-            # Use Data Editor
+
             edited_df = st.data_editor(
-                display_df.head(10), # Show top 10
+                display_df.head(10),
                 use_container_width=True,
                 hide_index=True,
                 column_config={
@@ -751,7 +750,7 @@ def render_dashboard():
                         help="View detailed risk analysis",
                         default=False,
                     ),
-                     "Audit View": st.column_config.CheckboxColumn(
+                    "Audit View": st.column_config.CheckboxColumn(
                         "Audit Trail",
                         help="View timeline and history",
                         default=False,
@@ -760,15 +759,12 @@ def render_dashboard():
                 disabled=['ID', 'Analyst', 'Risk', 'Status', 'Date'],
                 key="case_table_editor"
             )
-            
-            # Interaction Logic
-            # 1. Check for Checkbox Click (Risk View)
+
             risk_triggered = edited_df[edited_df['Risk Breakdown'] == True]
             if not risk_triggered.empty:
-                 row = risk_triggered.iloc[0]
-                 handle_risk_view(row['ID'], row)
-                 
-            # 2. Check for Checkbox Click (Audit View)
+                row = risk_triggered.iloc[0]
+                handle_risk_view(row['ID'], row)
+
             elif not edited_df[edited_df['Audit View'] == True].empty:
                 audit_triggered = edited_df[edited_df['Audit View'] == True]
                 row = audit_triggered.iloc[0]
@@ -776,9 +772,9 @@ def render_dashboard():
 
         else:
             st.info("No cases match the selected filters.")
-            
+
         st.markdown('</div>', unsafe_allow_html=True)
-        
+
         # Funnel Chart Row
         st.markdown('<div class="content-card"><div class="card-header">Conversion Funnel</div>', unsafe_allow_html=True)
         funnel_chart(df if not df.empty else None)
@@ -787,115 +783,288 @@ def render_dashboard():
     with m_col2:
         st.markdown('<div class="content-card">', unsafe_allow_html=True)
         st.markdown('<div class="card-header">Risk Distribution</div>', unsafe_allow_html=True)
-        
-        # Aggregate Risk for Chart
+
         if not df.empty:
             risk_counts = df['risk_level'].value_counts().reset_index()
             risk_counts.columns = ['Risk Level', 'Cases']
             risk_chart(risk_counts)
         else:
             st.info("No data")
-            
+
         st.markdown('</div>', unsafe_allow_html=True)
-        
+
         st.markdown('<div class="content-card">', unsafe_allow_html=True)
         st.markdown('<div class="card-header">Case Aging Heatmap</div>', unsafe_allow_html=True)
         if not df.empty:
-             # Convert filtered DF back to list of dicts for the helper function if needed, 
-             # OR update helper to accept DF.
-             # Helper expects list of dicts currently.
-             valid_records = df[['created_at', 'risk_level']].to_dict('records')
-             case_aging_heatmap(valid_records)
+            valid_records = df[['created_at', 'risk_level']].to_dict('records')
+            case_aging_heatmap(valid_records)
         else:
-             case_aging_heatmap(None)
+            st.info("No aging data.")
         st.markdown('</div>', unsafe_allow_html=True)
 
 def render_case_creation():
     st.title("Create New SAR Case")
-    
-    with st.container():
+
+    tab_manual, tab_csv = st.tabs(["📝 Manual Entry", "📂 CSV Batch Upload"])
+
+    with tab_manual:
         st.markdown('<div class="content-card"><div class="card-header">Case Information</div>', unsafe_allow_html=True)
         c1, c2 = st.columns(2)
         with c1:
-            customer_name = st.text_input("Customer Entity Name", value="John Doe")
+            customer_name = st.text_input("Customer Entity Name", value="")
             risk_category = st.selectbox("Risk Category", ["Structuring", "Money Laundering", "Human Trafficking"])
         with c2:
-            account_numb = st.text_input("Account Number", value="ACC-998877")
+            account_numb = st.text_input("Account Number", value="")
             case_priority = st.selectbox("Priority", ["Standard", "Urgent", "Critical"])
-            
+
         st.markdown("### Transaction Analysis")
-        default_tx = "2023-10-20: Cash Deposit $9,500\n2023-10-21: Cash Deposit $9,000\n2023-10-22: Cash Deposit $9,800\nTotal triggers structuring threshold."
-        tx_details = st.text_area("Transaction Details", height=150, value=default_tx)
+        tx_details = st.text_area("Transaction Details", height=150, value="",
+                                  placeholder="Enter transaction details: dates, amounts, channels, counterparties...")
+
+        col_submit, col_generate = st.columns(2)
+
+        with col_submit:
+            if st.button("📁 Create Case Only", type="secondary", use_container_width=True):
+                if not customer_name.strip():
+                    st.error("Customer name is required.")
+                elif not tx_details.strip():
+                    st.error("Transaction details are required.")
+                else:
+                    with st.spinner("Creating case..."):
+                        data_payload = {
+                            "kyc": {"full_name": customer_name, "date_of_birth": "N/A", "address": "N/A"},
+                            "accounts": [account_numb],
+                            "transactions": tx_details
+                        }
+                        new_id = create_sar_case(1, data_payload, "")
+                        if new_id:
+                            st.success(f"✅ Case #{new_id} created successfully. Use 'Generate SAR' to create the narrative.")
+                        else:
+                            st.error("Failed to create case. Check backend connection.")
+
+        with col_generate:
+            if st.button("🤖 Create Case & Generate SAR", type="primary", use_container_width=True):
+                if not customer_name.strip():
+                    st.error("Customer name is required.")
+                elif not tx_details.strip():
+                    st.error("Transaction details are required.")
+                else:
+                    # Step 1: Create the case
+                    with st.spinner("📁 Step 1/2 — Creating case record..."):
+                        data_payload = {
+                            "kyc": {"full_name": customer_name, "date_of_birth": "N/A", "address": "N/A"},
+                            "accounts": [account_numb],
+                            "transactions": tx_details
+                        }
+                        new_id = create_sar_case(1, data_payload, "")
+
+                    if not new_id:
+                        st.error("Failed to create case. Check backend connection.")
+                    else:
+                        st.success(f"✅ Case #{new_id} created.")
+
+                        # Step 2: Generate SAR Narrative via LLM
+                        with st.spinner("🤖 Step 2/2 — AI generating detailed SAR narrative... (this may take 30-90 seconds)"):
+                            result = generate_sar_for_case(new_id)
+
+                        if "error" in result:
+                            st.error(f"SAR generation failed: {result['error']}")
+                        else:
+                            narrative = result.get("narrative", "")
+                            prompt = result.get("prompt", "")
+
+                            st.markdown("---")
+
+                            # SAR Report Header
+                            st.markdown(f"""
+                            <div style="background-color:#102A43; border:1px solid #2A3F55; border-radius:6px; padding:20px; margin-bottom:16px;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                                    <div>
+                                        <span style="font-size:1.4rem; font-weight:700; color:#C9A227;">📄 Suspicious Activity Report</span>
+                                        <span style="margin-left:12px; padding:3px 8px; border-radius:4px; font-size:0.75rem; font-weight:600; background-color:rgba(13,148,136,0.2); color:#0D9488; border:1px solid #0D9488;">GENERATED</span>
+                                    </div>
+                                    <div style="color:#B0B8C1; font-size:0.85rem;">Case #{new_id} | {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}</div>
+                                </div>
+                                <div style="display:flex; gap:24px; font-size:0.85rem; color:#B0B8C1; border-top:1px solid #2A3F55; padding-top:8px;">
+                                    <span><strong>Subject:</strong> {customer_name}</span>
+                                    <span><strong>Category:</strong> {risk_category}</span>
+                                    <span><strong>Priority:</strong> {case_priority}</span>
+                                    <span><strong>Account:</strong> {account_numb or 'N/A'}</span>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                            # SAR Narrative Body
+                            st.markdown(f"""
+                            <div style="background-color:#1E3A5F; border-left:4px solid #C9A227; padding:20px; border-radius:4px; color:#E0E0E0; line-height:1.75; font-size:0.95rem; white-space:pre-wrap;">
+{narrative}
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                            # Expandable Details
+                            with st.expander("📋 View LLM Prompt Used"):
+                                st.code(prompt, language="text")
+
+                            # Download SAR as text file
+                            sar_header = f"SUSPICIOUS ACTIVITY REPORT\nCase ID: {new_id}\nSubject: {customer_name}\nGenerated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\nCategory: {risk_category}\nPriority: {case_priority}\n{'='*60}\n\n"
+                            st.download_button(
+                                "⬇️ Download SAR Report (.txt)",
+                                data=sar_header + narrative,
+                                file_name=f"SAR_Case_{new_id}_{datetime.date.today()}.txt",
+                                mime="text/plain"
+                            )
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with tab_csv:
+        st.markdown('<div class="content-card"><div class="card-header">Upload Transaction Data</div>', unsafe_allow_html=True)
+        st.info("Upload a CSV file with columns: customer_id, amount, transaction_date. Logic will automatically create a case, assess risk, and prepare it for SAR generation.")
         
-        if st.button("Submit for Analysis", type="primary"):
-            if not DB_CONNECTED:
-                st.error("Cannot analyze: Database not connected. Please configure your .env file with DB credentials.")
-            else:
-                with st.spinner("🤖 AI Architecting SAR Narrative... (Consulting Vector DB)"):
-                    data_payload = {
-                        "kyc": {"full_name": customer_name, "date_of_birth": "1980-01-01", "address": "123 Main St"},
-                        "accounts": [account_numb],
-                        "activity_start": "2023-10-20",
-                        "activity_end": "2023-10-22",
-                        "total_amount": 28300.00,
-                        "transactions": tx_details
-                    }
-                    rule_res = {"triggered_rules": f"Potential {risk_category} detected. Pattern: Multiple deposits < $10k."}
+        uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
+        
+        if uploaded_file is not None:
+            if st.button("🚀 Upload & Analyze", type="primary"):
+                with st.spinner("Processing CSV and Running Risk Engine..."):
+                    result = upload_csv_case(uploaded_file)
+                
+                if "error" in result:
+                    st.error(result['error'])
+                else:
+                    st.session_state.csv_case_id = result.get('case_id')
+                    st.session_state.csv_result = result
+                    st.success("File Processed Successfully!")
+            
+            # Show results if we have them in session
+            if "csv_result" in st.session_state and st.session_state.csv_result:
+                result = st.session_state.csv_result
+                new_case_id = result.get('case_id')
+                risk_score = result.get('risk_score')
+                risk_level = result.get('risk_level')
+                tx_count = result.get('tx_count')
+                triggered_rules = result.get('triggered_rules', [])
 
-                    try:
-                        prompt, narrative = generate_sar_narrative(data_payload, rule_res)
-                        new_id = create_sar_case(1, data_payload, narrative)
-                        save_audit_log(new_id, rule_res["triggered_rules"], prompt, narrative)
-                        
-                        st.success(f"Case {new_id} Created Successfully!")
-                        
-                        # Show Result
-                        st.markdown("---")
-                        st.subheader("Analysis Results")
-                        st.markdown(f'<div style="background-color:#1E3A5F; border-left:4px solid #C9A227; padding:15px; border-radius:4px; color:#FFFFFF;">{narrative}</div>', unsafe_allow_html=True)
-                        with st.expander("View Logic"):
-                            st.text(f"Prompt Used:\n{prompt}")
+                # Display Results
+                r1, r2, r3, r4 = st.columns(4)
+                with r1: st.metric("New Case ID", f"#{new_case_id}")
+                with r2: st.metric("Risk Score", f"{risk_score}/100")
+                with r3: st.metric("Risk Level", risk_level, delta="High" if risk_level in ['High', 'Critical'] else "Normal", delta_color="inverse")
+                with r4: st.metric("Transactions", tx_count)
+                
+                if triggered_rules:
+                    st.warning(f"⚠️ Triggered Rules: {len(triggered_rules)}")
+                    for rule in triggered_rules:
+                        st.caption(f"- {rule}")
+                
+                st.divider()
+                
+                col_gen_sar, col_view = st.columns(2)
+                with col_gen_sar:
+                    if st.button("🤖 Generate SAR Narrative Now", key="csv_gen_sar"):
+                        with st.spinner("Generating SAR Narrative..."):
+                            gen_result = generate_sar_for_case(new_case_id)
+                            
+                        if "error" in gen_result:
+                            st.error(gen_result['error'])
+                        else:
+                            narrative = gen_result.get("narrative", "")
+                            st.success("SAR Narrative Generated!")
+                            st.markdown(f"""
+                            <div style="background-color:#1E3A5F; border-left:4px solid #C9A227; padding:20px; border-radius:4px; color:#E0E0E0; line-height:1.75; font-size:0.95rem; white-space:pre-wrap;">
+{narrative}
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            st.download_button(
+                                "⬇️ Download SAR (.txt)",
+                                data=narrative,
+                                file_name=f"SAR_Case_{new_case_id}.txt",
+                                mime="text/plain"
+                            )
 
-                    except Exception as e:
-                        st.error(f"Analysis Failed: {str(e)}")
         st.markdown('</div>', unsafe_allow_html=True)
 
 def render_case_repository():
     st.title("Case Repository")
-    
-    if not DB_CONNECTED:
-        st.warning("Database unavailable. Showing simulation data.")
-        # Sim Data
-        sim_df = pd.DataFrame([
-             {"Case ID": "CAS-1001", "Customer": "Acme Corp", "Status": "Open", "Risk": "High", "Date": "2023-10-25"},
-             {"Case ID": "CAS-1002", "Customer": "John Doe", "Status": "Closed", "Risk": "Low", "Date": "2023-10-24"}
-        ])
-        st.markdown(f'<div class="content-card"><div class="card-header">Case List (Simulated)</div>', unsafe_allow_html=True)
-        st.dataframe(sim_df, use_container_width=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        return
 
     cases = get_all_cases(limit=50)
     if not cases:
         st.info("No cases in repository. Create one in Case Management!")
         return
-        
+
     df = pd.DataFrame(cases)
+
+    # Summary stats
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    with sc1: kpi_card("Total Cases", str(len(df)))
+    with sc2: kpi_card("Draft", str(len(df[df['status'] == 'Draft'])))
+    with sc3: kpi_card("In Review", str(len(df[df['status'].isin(['Review', 'Pending Review'])])))
+    with sc4: kpi_card("Filed", str(len(df[df['status'].isin(['Filed', 'Approved'])])))
+
+    st.write("")
+
     st.markdown(f'<div class="content-card"><div class="card-header">Case List ({len(df)})</div>', unsafe_allow_html=True)
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(df[['id', 'customer_name', 'status', 'risk_level', 'created_at', 'analyst_id']], use_container_width=True, hide_index=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Generate SAR for specific case
+    st.markdown('<div class="content-card"><div class="card-header">Generate SAR for Existing Case</div>', unsafe_allow_html=True)
+
+    case_ids = df['id'].tolist()
+    selected_case = st.selectbox("Select Case ID", case_ids, format_func=lambda x: f"Case #{x} — {df[df['id']==x]['customer_name'].values[0]} ({df[df['id']==x]['status'].values[0]})")
+
+    if st.button("🤖 Generate Detailed SAR", type="primary"):
+        with st.spinner("🤖 Generating detailed SAR narrative via LLM... (this may take 30-90 seconds)"):
+            result = generate_sar_for_case(selected_case)
+
+        if "error" in result:
+            st.error(f"SAR generation failed: {result['error']}")
+        else:
+            narrative = result.get("narrative", "")
+            prompt = result.get("prompt", "")
+            case_row = df[df['id'] == selected_case].iloc[0]
+
+            st.success(f"✅ SAR generated for Case #{selected_case}")
+
+            st.markdown(f"""
+            <div style="background-color:#102A43; border:1px solid #2A3F55; border-radius:6px; padding:20px; margin-bottom:16px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                    <span style="font-size:1.4rem; font-weight:700; color:#C9A227;">📄 Suspicious Activity Report</span>
+                    <span style="color:#B0B8C1; font-size:0.85rem;">Case #{selected_case} | {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}</span>
+                </div>
+                <div style="display:flex; gap:24px; font-size:0.85rem; color:#B0B8C1; border-top:1px solid #2A3F55; padding-top:8px;">
+                    <span><strong>Subject:</strong> {case_row.get('customer_name', 'N/A')}</span>
+                    <span><strong>Status:</strong> {case_row.get('status', 'N/A')}</span>
+                    <span><strong>Risk:</strong> {case_row.get('risk_level', 'N/A')}</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown(f"""
+            <div style="background-color:#1E3A5F; border-left:4px solid #C9A227; padding:20px; border-radius:4px; color:#E0E0E0; line-height:1.75; font-size:0.95rem; white-space:pre-wrap;">
+{narrative}
+            </div>
+            """, unsafe_allow_html=True)
+
+            with st.expander("📋 View LLM Prompt Used"):
+                st.code(prompt, language="text")
+
+            st.download_button(
+                "⬇️ Download SAR Report (.txt)",
+                data=f"SAR REPORT — Case #{selected_case}\nSubject: {case_row.get('customer_name', 'N/A')}\nGenerated: {datetime.datetime.now()}\n{'='*60}\n\n{narrative}",
+                file_name=f"SAR_Case_{selected_case}_{datetime.date.today()}.txt",
+                mime="text/plain"
+            )
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 def render_audit_trail():
     st.title("Audit Trail")
-    if not DB_CONNECTED:
-        st.warning("Database unavailable.")
-        return
 
     logs = get_audit_logs(limit=50)
     if not logs:
         st.info("No audit logs found.")
         return
-        
+
     df = pd.DataFrame(logs)
     st.markdown('<div class="content-card"><div class="card-header">System Logs</div>', unsafe_allow_html=True)
     st.dataframe(df, use_container_width=True)
@@ -904,16 +1073,19 @@ def render_audit_trail():
 def render_model_explainability():
     st.title("Model Explainability")
     st.info("This section queries the ChromaDB Vector Store for regulatory context.")
-    
+
     query = st.text_input("Test RAG Query", "structuring threshold")
     if st.button("Retrieve Context"):
         docs = retrieve_relevant_docs(query)
         if docs:
             for d in docs:
-                for item in d: # Chroma returns list of lists sometimes
-                     st.markdown(f"> {item}")
+                if isinstance(d, list):
+                    for item in d:
+                        st.markdown(f"> {item}")
+                else:
+                    st.markdown(f"> {d}")
         else:
-             st.warning("No documents found.")
+            st.warning("No documents found.")
 
 # -----------------------------------------------------------------------------
 # Main

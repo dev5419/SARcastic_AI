@@ -91,7 +91,7 @@ regintel-compliance-suite/
 1.  **Clone the Repository**
     ```bash
     git clone https://github.com/your-org/regintel-compliance-suite.git
-    cd regintel-compliance-suite
+    cd RegIntel-Compliance-Suite
     ```
 
 2.  **Create Virtual Environment**

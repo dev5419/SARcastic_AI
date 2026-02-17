@@ -7,4 +7,12 @@ ollama
 python-dotenv
 chromadb
 passlib[bcrypt]
+bcrypt==4.0.1
 langchain-ollama
+fastapi
+uvicorn[standard]
+python-jose[cryptography]
+requests
+python-multipart
+altair
+pandas

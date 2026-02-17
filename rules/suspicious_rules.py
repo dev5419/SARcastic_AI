@@ -1,5 +1,6 @@
-import re
 from datetime import datetime
+import pandas as pd
+import numpy as np
 
 PROHIBITED_WORDS = ["guilty", "criminal", "definitely", "certainly", "obviously"]
 
@@ -163,4 +164,70 @@ def evaluate_rules(data):
         "warnings": warnings,
         "confidence_label": confidence_label,
         "confidence_score": confidence_score
+    }
+
+
+def evaluate_risk_model(df):
+    """
+    Evaluates risk based on transaction DataFrame.
+    Computes:
+    - Total Volume
+    - High Value Count (> $9000)
+    - Cross Border Flags (if 'country' column exists and != 'US')
+    """
+    metrics = {}
+    triggered_rules = []
+
+    # Ensure correct types
+    df['amount'] = pd.to_numeric(df['amount'], errors='coerce').fillna(0)
+    if 'transaction_date' in df.columns:
+        df['transaction_date'] = pd.to_datetime(df['transaction_date'], errors='coerce')
+
+    # 1. Total Transaction Volume
+    total_volume = df['amount'].sum()
+    metrics['total_volume'] = float(total_volume)
+
+    # 2. High Value Transactions
+    high_value_tx = df[df['amount'] >= 9000]
+    high_value_count = len(high_value_tx)
+    metrics['high_value_count'] = high_value_count
+
+    if high_value_count > 0:
+        triggered_rules.append(f"High Value Transactions Detected (Count: {high_value_count})")
+
+    # 3. Structuring Check (Simple Logic)
+    structuring_tx = df[(df['amount'] > 9000) & (df['amount'] < 10000)]
+    if len(structuring_tx) > 2:
+        triggered_rules.append("Potential Structuring Detected ($9000-$10000 range)")
+
+    # 4. Cross Border
+    cross_border_count = 0
+    if 'country' in df.columns:
+        cross_border = df[df['country'].str.upper() != 'US']
+        cross_border_count = len(cross_border)
+        if cross_border_count > 0:
+            triggered_rules.append(f"Cross-Border Activity Detected ({cross_border_count} txns)")
+    metrics['cross_border_count'] = cross_border_count
+
+    # Scoring Logic
+    base_score = 0
+    if total_volume > 100000: base_score += 30
+    elif total_volume > 20000: base_score += 10
+    
+    base_score += (high_value_count * 5)
+    base_score += (cross_border_count * 10)
+
+    # Normalize to 0-100
+    risk_score = min(base_score, 100)
+    
+    if risk_score >= 80: risk_level = "Critical"
+    elif risk_score >= 50: risk_level = "High"
+    elif risk_score >= 20: risk_level = "Medium"
+    else: risk_level = "Low"
+
+    return {
+        "score": risk_score,
+        "level": risk_level,
+        "metrics": metrics,
+        "triggered_rules": triggered_rules
     }

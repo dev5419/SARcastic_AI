@@ -1,5 +1,5 @@
 from sqlalchemy import text
-from database.db import engine
+from backend.database import engine
 
 def save_audit_log(sar_id, rules_triggered, llm_prompt, llm_response):
     """
@@ -95,19 +95,7 @@ def get_case_audit_history(sar_id):
                 "details": f"Rules: {log.rules_triggered[:50]}..."
             })
             
-        # 3. Add Mock 'Review' events if status warrants
-        if case_info and case_info.status in ['Review', 'Approved']:
-             # Mock a review event shortly after creation
-             import datetime
-             history.append({
-                "timestamp": case_info.created_at + datetime.timedelta(hours=2),
-                "user": "Reviewer (Mike R.)",
-                "action": "Manual Review Started",
-                "risk_version": "v1.2",
-                "model_version": "N/A",
-                "details": "Assigned to self"
-             })
-
         # Sort by timestamp desc
         history.sort(key=lambda x: x['timestamp'], reverse=True)
         return history
+
