@@ -16,8 +16,32 @@ def startup_db_client():
     from sqlalchemy import text
     try:
         with engine.begin() as conn:
-            # Check/Create Transactions Table
+            # Check/Create Sar Details Table for Annexure II
             conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS sar_details (
+                    id SERIAL PRIMARY KEY,
+                    case_id INT REFERENCES sar_cases(id) ON DELETE CASCADE,
+                    internal_ref_id UUID,
+                    risk_score VARCHAR(20),
+                    part_a JSONB DEFAULT '{}',
+                    part_b_narrative TEXT,
+                    part_c JSONB DEFAULT '{}',
+                    part_d JSONB DEFAULT '[]',
+                    part_e1_person JSONB DEFAULT '{}',
+                    part_e2_accounts JSONB DEFAULT '[]',
+                    part_e3_entity JSONB DEFAULT '{}',
+                    part_f_goods JSONB DEFAULT '{}',
+                    full_report JSONB DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_sar_details_case_id ON sar_details(case_id);
+
+                -- Ensure sar_cases has necessary columns
+                ALTER TABLE sar_cases ADD COLUMN IF NOT EXISTS internal_ref_id UUID;
+                ALTER TABLE sar_cases ADD COLUMN IF NOT EXISTS risk_score VARCHAR(20);
+                
+                -- Check/Create Transactions Table
                 CREATE TABLE IF NOT EXISTS transactions (
                     id UUID PRIMARY KEY,
                     case_id INT REFERENCES sar_cases(id) ON DELETE CASCADE,
@@ -33,7 +57,7 @@ def startup_db_client():
                 );
                 CREATE INDEX IF NOT EXISTS idx_transactions_case_id ON transactions(case_id);
             """))
-            print("Database schema verified.")
+            print("Database schema verified (Transactions & SAR Details).")
     except Exception as e:
         print(f"Database startup error: {e}")
 

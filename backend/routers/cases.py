@@ -130,6 +130,21 @@ def approve_case(case_id: int, current_user = Depends(get_current_user)):
 def get_case_audit(case_id: int, current_user = Depends(get_current_user)):
     return audit_service.get_case_audit_history(case_id)
 
+@router.get("/{case_id}/details")
+def get_case_details(case_id: int, current_user = Depends(get_current_user)):
+    return sar_service.get_sar_details_full(case_id)
+
+class SARSectionUpdate(BaseModel):
+    section: str
+    # data can be dict or list depending on section (e.g. part_d is list, part_a is dict)
+    # Using Any or relaxed validation
+    data: object
+
+@router.put("/{case_id}/details")
+def update_case_details(case_id: int, update: SARSectionUpdate, current_user = Depends(get_current_user)):
+    sar_service.update_sar_section(case_id, update.section, update.data)
+    return {"status": "success"}
+
 @router.post("/import-csv")
 def import_csv(file: UploadFile = File(...), current_user = Depends(get_current_user)):
     user_id = current_user.id if hasattr(current_user, 'id') else 1

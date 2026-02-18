@@ -46,7 +46,30 @@ def get_case_by_id(sar_id):
             return resp.json()
     except Exception as e:
         print(f"Case fetch error: {e}")
+    except Exception as e:
+        print(f"Case fetch error: {e}")
     return None
+
+def get_sar_details(case_id):
+    try:
+        resp = requests.get(f"{API_URL}/cases/{case_id}/details", headers=get_headers())
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        print(f"Details Error: {e}")
+    return {}
+
+def update_sar_section(case_id, section, data):
+    try:
+        resp = requests.put(
+            f"{API_URL}/cases/{case_id}/details", 
+            json={"section": section, "data": data},
+            headers=get_headers()
+        )
+        return resp.status_code == 200
+    except Exception as e:
+        print(f"Update Error: {e}")
+        return False
 
 def create_sar_case(analyst_id, data, generated_narrative):
     kyc = data.get("kyc", {})
@@ -1087,9 +1110,229 @@ def render_model_explainability():
         else:
             st.warning("No documents found.")
 
-# -----------------------------------------------------------------------------
-# Main
-# -----------------------------------------------------------------------------
+            st.warning("No documents found.")
+
+def render_sar_report_page():
+    st.title("📄 Suspicious Activity Report (SAR) Module")
+    
+    # Select Case
+    cases = get_all_cases(50)
+    if not cases:
+        st.warning("No cases available.")
+        return
+        
+    df_cases = pd.DataFrame(cases)
+    case_opts = df_cases['id'].tolist()
+    
+    # Auto-select if passed from another page
+    default_idx = 0
+    if "selected_case_id" in st.session_state:
+        if st.session_state.selected_case_id in case_opts:
+            default_idx = case_opts.index(st.session_state.selected_case_id)
+            
+    selected_id = st.selectbox("Select Case for SAR Filing", case_opts, index=default_idx, format_func=lambda x: f"Case #{x}")
+    st.session_state.selected_case_id = selected_id
+    
+    # Fetch Data
+    details = get_sar_details(selected_id)
+    if not details:
+        st.error("Failed to load SAR details. Initialize the case first.")
+        return
+        
+    # Tabs for Annexure II
+    tab_header, tab_a, tab_b, tab_c, tab_d, tab_e, tab_f, tab_export = st.tabs([
+        "🔐 Header", 
+        "🟦 Part A (Entity)", 
+        "🟦 Part B (Narrative)", 
+        "🟦 Part C (Action)", 
+        "🟦 Part D (Indicators)", 
+        "🟦 Part E (Subjects)", 
+        "🟦 Part F (Goods)", 
+        "📄 Export"
+    ])
+    
+    with tab_header:
+        st.markdown(f"### SAR Reference: `{details.get('internal_ref_id')}`")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.metric("Risk Score", details.get('risk_score', 'Medium'))
+            st.metric("Generated Date", details.get('created_at', 'N/A')[:10])
+        with c2:
+            st.metric("Case ID", f"#{selected_id}")
+            st.metric("Status", "Draft") # Could fetch real status
+            
+    with tab_a:
+        st.subheader("Part A: Particulars of Reporting Entity")
+        part_a = details.get('part_a', {})
+        if isinstance(part_a, str): part_a = json.loads(part_a)
+        
+        with st.form("part_a_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                entity_name = st.text_input("Reporting Entity Name", value=part_a.get('entity_name', 'RegIntel Financial Services'))
+                reg_number = st.text_input("Registration Number", value=part_a.get('reg_number', ''))
+                business_type = st.selectbox("Nature of Business", ["Bank", "FinTech", "Casino", "Dealer", "Other"], index=0)
+            with col2:
+                street = st.text_input("Street Address", value=part_a.get('street', ''))
+                city = st.text_input("City", value=part_a.get('city', 'New York'))
+                country = st.text_input("Country", value=part_a.get('country', 'USA'))
+            
+            st.markdown("#### Compliance Officer")
+            co_col1, co_col2 = st.columns(2)
+            with co_col1:
+                co_first = st.text_input("First Name", value=part_a.get('co_first', ''))
+                co_last = st.text_input("Last Name", value=part_a.get('co_last', ''))
+                co_phone = st.text_input("Telephone", value=part_a.get('co_phone', ''))
+            with co_col2:
+                co_email = st.text_input("Email", value=part_a.get('co_email', ''))
+                co_desi = st.text_input("Designation", value=part_a.get('co_designation', 'MLRO'))
+            
+            if st.form_submit_button("Save Part A"):
+                new_data = {
+                    "entity_name": entity_name, "reg_number": reg_number, "business_type": business_type,
+                    "street": street, "city": city, "country": country,
+                    "co_first": co_first, "co_last": co_last, "co_phone": co_phone,
+                    "co_email": co_email, "co_designation": co_desi
+                }
+                if update_sar_section(selected_id, "part_a", new_data):
+                    st.success("Part A Saved")
+
+    with tab_b:
+        st.subheader("Part B: Description of Suspicious Activity")
+        current_narrative = details.get('part_b_narrative', '') or details.get('generated_narrative', '')
+        
+        st.info("💡 AI Generated Narrative based on Transactions and Rule Triggers.")
+        
+        if st.button("✨ Regenerate Narrative (LLM)"):
+             with st.spinner("Generating..."):
+                 res = generate_sar_for_case(selected_id)
+                 if "narrative" in res:
+                     current_narrative = res['narrative']
+                     # Update details immediately (though generate_sar writes to DB, details dict is stale)
+                     st.experimental_rerun()
+        
+        new_narrative = st.text_area("Narrative Content", value=current_narrative, height=600)
+        
+        if st.button("Save Part B"):
+            # Update generated_narrative in main table and part_b in details
+            # Currently sar_service updates generated_narrative. 
+            # We should probably sync them or just use generated_narrative.
+            # But the requirement is strict Part B.
+            if update_sar_section(selected_id, "part_b_narrative", new_narrative):
+                st.success("Part B Saved")
+
+    with tab_c:
+        st.subheader("Part C: Action Taken")
+        part_c = details.get('part_c', {})
+        if isinstance(part_c, str): part_c = json.loads(part_c)
+        
+        with st.form("part_c_form"):
+            c1, c2 = st.columns(2)
+            with c1:
+                action = st.selectbox("Action Taken", ["Allowed", "Blocked", "Frozen", "Delayed"], index=0)
+                account_flagged = st.checkbox("Account Flagged?", value=part_c.get('flagged', False))
+                edd_init = st.checkbox("EDD Initiated?", value=part_c.get('edd', False))
+            with c2:
+                contacted = st.radio("Customer Contacted?", ["Yes", "No"], index=1)
+                escalation_ref = st.text_input("Internal Escalation Ref", value=part_c.get('escalation_ref', ''))
+            
+            notes = st.text_area("Internal Case Notes", value=part_c.get('notes', ''))
+            
+            if st.form_submit_button("Save Part C"):
+                data_c = {
+                    "action": action, "flagged": account_flagged, "edd": edd_init,
+                    "contacted": contacted, "escalation_ref": escalation_ref, "notes": notes,
+                    "officer": st.session_state.get('user_email', 'Unknown')
+                }
+                if update_sar_section(selected_id, "part_c", data_c):
+                    st.success("Part C Saved")
+
+    with tab_d:
+        st.subheader("Part D: Indicators")
+        part_d = details.get('part_d', [])
+        if isinstance(part_d, str): part_d = json.loads(part_d)
+        
+        indicators_list = [
+            "Activity does not match client profile", "Money Laundering", "Fraud", "Structuring",
+            "Smurfing", "Corruption / Bribery", "Terrorism", "Human Trafficking", "Tax Evasion",
+            "PEP Involvement", "Adverse Media", "OFAC/Watchlist hit", "Hawala", "Environmental Crime",
+            "Insider Trading", "Drug Trafficking", "Arms Trafficking", "Proliferation", "Other"
+        ]
+        
+        selected_indicators = st.multiselect("Select all that apply", indicators_list, default=part_d)
+        
+        if st.button("Save Part D"):
+            if update_sar_section(selected_id, "part_d", selected_indicators):
+                st.success("Part D Saved")
+
+    with tab_e:
+        st.subheader("Part E: Persons, Entities, and Accounts")
+        
+        st.markdown("**1. Person Details**")
+        part_e1 = details.get('part_e1_person', {})
+        if isinstance(part_e1, str): part_e1 = json.loads(part_e1)
+        
+        with st.expander("Edit Person Details", expanded=True):
+            pe_c1, pe_c2 = st.columns(2)
+            with pe_c1:
+                p_first = st.text_input("First Name", value=part_e1.get('first', ''))
+                p_id = st.text_input("ID / Passport", value=part_e1.get('id_num', ''))
+                p_nat = st.text_input("Nationality", value=part_e1.get('nationality', ''))
+            with pe_c2:
+                p_last = st.text_input("Last Name", value=part_e1.get('last', ''))
+                p_occ = st.text_input("Occupation", value=part_e1.get('occupation', ''))
+                is_pep = st.checkbox("Is PEP?", value=part_e1.get('is_pep', False))
+            
+            if st.button("Save Person"):
+                pe_data = {"first": p_first, "last": p_last, "id_num": p_id, "nationality": p_nat, "occupation": p_occ, "is_pep": is_pep}
+                update_sar_section(selected_id, "part_e1_person", pe_data)
+                st.toast("Person saved")
+
+        st.markdown("**2. Accounts Involved**")
+        part_e2 = details.get('part_e2_accounts', [])
+        if isinstance(part_e2, str): part_e2 = json.loads(part_e2)
+        if not part_e2: part_e2 = [{"account_number": "", "bank": "", "balance": 0.0}]
+        
+        df_acc = pd.DataFrame(part_e2)
+        edited_acc = st.data_editor(df_acc, num_rows="dynamic", key="acc_editor")
+        
+        if st.button("Save Accounts"):
+            acc_list = edited_acc.to_dict('records')
+            update_sar_section(selected_id, "part_e2_accounts", acc_list)
+            st.toast("Accounts saved")
+
+    with tab_f:
+        st.subheader("Part F: Goods / Services")
+        part_f = details.get('part_f_goods', {})
+        if isinstance(part_f, str): part_f = json.loads(part_f)
+        
+        disposition = st.multiselect("Disposition of Funds", 
+            ["Property", "Shares", "EFT", "Vehicle", "Jewelry", "Firearm", "Land", "Equipment", "Other"],
+            default=part_f.get('disposition', []))
+            
+        st.markdown("**Items Involved**")
+        goods_list = part_f.get('items', [{"description": "", "value": 0.0, "country": ""}])
+        df_goods = pd.DataFrame(goods_list)
+        edited_goods = st.data_editor(df_goods, num_rows="dynamic", key="goods_editor")
+        
+        if st.button("Save Part F"):
+            f_data = {
+                "disposition": disposition,
+                "items": edited_goods.to_dict('records')
+            }
+            update_sar_section(selected_id, "part_f_goods", f_data)
+            st.success("Part F Saved")
+
+    with tab_export:
+        st.subheader("Export & Submit")
+        st.warning("Ensure all parts are completed before export.")
+        
+        if st.button("📄 Generate Regulator-Ready PDF"):
+            st.toast("Generating PDF... (Mock)", icon="📄")
+            time.sleep(1)
+            st.success("PDF Generated Successfully")
+            
+        st.json(details) # Preview raw data
 def main():
     if not st.session_state.authenticated:
         render_login()
@@ -1103,6 +1346,7 @@ def main():
         if st.button("Dashboard", use_container_width=True): st.session_state.page = "Dashboard"; st.rerun()
         if st.button("Case Management", use_container_width=True): st.session_state.page = "Case Creation"; st.rerun()
         if st.button("Case Repository", use_container_width=True): st.session_state.page = "Case Repository"; st.rerun()
+        if st.button("SAR Reporting", use_container_width=True): st.session_state.page = "SAR Reporting"; st.rerun()
         if st.button("Audit Trail", use_container_width=True): st.session_state.page = "Audit Trail"; st.rerun()
         if st.button("Explainability", use_container_width=True): st.session_state.page = "Model Explainability"; st.rerun()
         st.markdown("---")
@@ -1111,6 +1355,7 @@ def main():
     if st.session_state.page == "Dashboard": render_dashboard()
     elif st.session_state.page == "Case Creation": render_case_creation()
     elif st.session_state.page == "Case Repository": render_case_repository()
+    elif st.session_state.page == "SAR Reporting": render_sar_report_page()
     elif st.session_state.page == "Audit Trail": render_audit_trail()
     elif st.session_state.page == "Model Explainability": render_model_explainability()
 

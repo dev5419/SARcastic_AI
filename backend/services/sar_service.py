@@ -32,7 +32,90 @@ def create_sar_case(analyst_id, data, generated_narrative):
                 "narrative": generated_narrative
             }
         )
-        return result.fetchone()[0]
+        new_id = result.fetchone()[0]
+    
+    # Initialize detailed structure
+    initialize_sar_details(new_id)
+    
+    return new_id
+
+def initialize_sar_details(case_id, risk_score_val="Medium"):
+    """
+    Initializes the detailed SAR structure (Annexure II) for a case.
+    """
+    internal_ref = str(uuid.uuid4())
+    
+    with engine.begin() as connection:
+        # Check if already exists to avoid duplicates
+        existing = connection.execute(
+            text("SELECT id FROM sar_details WHERE case_id = :cid"),
+            {"cid": case_id}
+        ).fetchone()
+        
+        if not existing:
+            connection.execute(
+                text("""
+                    INSERT INTO sar_details 
+                    (case_id, internal_ref_id, risk_score, part_a, part_c, part_d, part_e1_person, part_e2_accounts, part_e3_entity, part_f_goods)
+                    VALUES 
+                    (:case_id, :internal_ref, :risk_score, '{}', '{}', '[]', '{}', '[]', '{}', '{}')
+                """),
+                {
+                    "case_id": case_id,
+                    "internal_ref": internal_ref,
+                    "risk_score": risk_score_val
+                }
+            )
+            
+            # Link back to main table
+            connection.execute(
+                text("UPDATE sar_cases SET internal_ref_id = :ref, risk_score = :risk WHERE id = :cid"),
+                {"ref": internal_ref, "risk": risk_score_val, "cid": case_id}
+            )
+
+def get_sar_details_full(case_id):
+    """
+    Retrieves the full Annexure II SAR details.
+    """
+    with engine.connect() as connection:
+        result = connection.execute(
+            text("SELECT * FROM sar_details WHERE case_id = :cid"),
+            {"cid": case_id}
+        )
+        row = result.mappings().first()
+        if not row:
+            # Auto-initialize if missing (migration path)
+            case_info = get_case_by_id(case_id)
+            risk = "Medium"
+            if case_info:
+                 # Logic to determine risk from case info if possible
+                 pass
+            initialize_sar_details(case_id, risk)
+            return get_sar_details_full(case_id)
+            
+        # Convert JSON strings to dicts if they come back as strings (depending on driver)
+        # SQLAlchemy with psycopg2 usually handles JSONB automatically.
+        return dict(row)
+
+def update_sar_section(case_id, section_field, data):
+    """
+    Updates a specific section of the SAR (Part A - F).
+    """
+    allowed_fields = ['part_a', 'part_c', 'part_d', 'part_e1_person', 'part_e2_accounts', 'part_e3_entity', 'part_f_goods', 'full_report']
+    if section_field not in allowed_fields:
+        raise ValueError(f"Invalid section: {section_field}")
+    
+    # Ensure data is JSON serializable (if passing dict)
+    if isinstance(data, (dict, list)):
+        json_data = json.dumps(data)
+    else:
+        json_data = data
+        
+    with engine.begin() as connection:
+        connection.execute(
+            text(f"UPDATE sar_details SET {section_field} = :data, updated_at = CURRENT_TIMESTAMP WHERE case_id = :cid"),
+            {"data": json_data, "cid": case_id}
+        )
 
 def update_edited_narrative(sar_id, edited_text):
     """
@@ -185,7 +268,7 @@ def generate_regulatory_report():
     metrics = get_dashboard_metrics()
     
     # 2. Construct Report
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     report = f"""
     FINANCIAL CRIMES ENFORCEMENT NETWORK (FinCEN) REPORT
     SAR ACTIVITY REVIEW - AUTOMATED GENERATION
@@ -305,6 +388,22 @@ def process_csv_upload(file_content: bytes, filename: str, user_id: int):
                     "country": country
                 }
             )
+            
+        # Initialize SAR Details
+        internal_ref = str(uuid.uuid4())
+        connection.execute(
+            text("""
+                INSERT INTO sar_details 
+                (case_id, internal_ref_id, risk_score, part_a, part_c, part_d, part_e1_person, part_e2_accounts, part_e3_entity, part_f_goods)
+                VALUES 
+                (:case_id, :internal_ref, :risk_score, '{}', '{}', '[]', '{}', '[]', '{}', '{}')
+            """),
+            {
+                "case_id": new_case_id,
+                "internal_ref": internal_ref,
+                "risk_score": risk_result['level']
+            }
+        )
 
     # 3. Create Audit Log (Moved outside transaction to ensure case is committed first)
     save_audit_log(
