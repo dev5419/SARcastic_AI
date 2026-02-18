@@ -76,4 +76,4 @@ app.include_router(cases.router, prefix=f"{settings.API_V1_STR}/cases", tags=["c
 
 @app.get("/")
 def root():
-    return {"message": "Welcome to RegIntel Compliance Suite API"}
+    return {"message": "Welcome to SARcastic AI API"}

@@ -1,4 +1,4 @@
-# RegIntel Compliance Suite MVP
+# SARcastic AI MVP
 
 ## Installation & Setup
 
@@ -7,7 +7,7 @@
    ```env
    DB_HOST=localhost
    DB_PORT=5432
-   DB_NAME=sar_db
+   DB_NAME=sarcastic_ai_db
    DB_USER=postgres
    DB_PASSWORD=admin123
    OLLAMA_MODEL=llama3
@@ -57,9 +57,9 @@ API Docs: http://localhost:8000/docs
 
 ## Login Credentials (From Database)
 Email	Password	Role
-admin@regintel.com	admin123	Compliance Head
-sarah@regintel.com	sarah123	Analyst
-mike@regintel.com	mike123	Reviewer
-jane@regintel.com	jane123	MLRO
-david@regintel.com	david123	Analyst
-auditor@regintel.com	audit123	Auditor
+admin@sarcastic.ai	admin123	Compliance Head
+sarah@sarcastic.ai	sarah123	Analyst
+mike@sarcastic.ai	mike123	Reviewer
+jane@sarcastic.ai	jane123	MLRO
+david@sarcastic.ai	david123	Analyst
+auditor@sarcastic.ai	audit123	Auditor

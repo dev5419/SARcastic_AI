@@ -88,7 +88,7 @@ def get_case_audit_history(sar_id):
         for log in db_logs:
             history.append({
                 "timestamp": log.created_at,
-                "user": "System (RegIntel AI)",
+                "user": "System (SARcastic AI)",
                 "action": "Risk Assessment & Narrative Generation",
                 "risk_version": "v1.2",
                 "model_version": "RegLLM-Pro-24b",

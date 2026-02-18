@@ -1,12 +1,12 @@
-# RegIntel Compliance Suite
+# SARcastic AI
 
 ## 1. Project Title
-RegIntel Compliance Suite: Intelligent Financial Crime and SAR Automation Platform
+SARcastic AI: Intelligent Financial Crime and SAR Automation Platform
 
 ## 2. Overview
-The RegIntel Compliance Suite is an enterprise-grade financial compliance intelligence platform designed to streamline the investigation and reporting of suspicious financial activity. Financial institutions face increasing regulatory pressure to file accurate, timely, and comprehensive Suspicious Activity Reports (SARs). Manual drafting of these narratives is time-consuming, prone to error, and often lacks consistent standardization.
+The SARcastic AI Platform is an enterprise-grade financial compliance intelligence platform designed to streamline the investigation and reporting of suspicious financial activity. Financial institutions face increasing regulatory pressure to file accurate, timely, and comprehensive Suspicious Activity Reports (SARs). Manual drafting of these narratives is time-consuming, prone to error, and often lacks consistent standardization.
 
-RegIntel solves these challenges by leveraging advanced natural language processing to automate the generation of SAR narratives while maintaining strict adherence to regulatory guidelines (e.g., FFIEC BSA/AML Manual). Crucially, the system prioritizes "Glass Box" AI principles, offering full model explainability, rigid audit trails, and retrieval-augmented generation (RAG) to ground all outputs in verified regulatory texts. This ensures that compliance officers can trust, verify, and defend the system's outputs during regulatory examinations.
+SARcastic AI solves these challenges by leveraging advanced natural language processing to automate the generation of SAR narratives while maintaining strict adherence to regulatory guidelines (e.g., FFIEC BSA/AML Manual). Crucially, the system prioritizes "Glass Box" AI principles, offering full model explainability, rigid audit trails, and retrieval-augmented generation (RAG) to ground all outputs in verified regulatory texts. This ensures that compliance officers can trust, verify, and defend the system's outputs during regulatory examinations.
 
 ## 3. Key Features
 
@@ -60,7 +60,7 @@ The platform follows a modular, service-oriented architecture designed for scala
 ## 5. Folder Structure
 
 ```text
-regintel-compliance-suite/
+sarcastic-ai/
 ├── auth/                   # Authentication and session management
 ├── database/               # Database connection and schema definitions
 │   ├── db.py               # SQLAlchemy engine configuration
@@ -90,8 +90,8 @@ regintel-compliance-suite/
 
 1.  **Clone the Repository**
     ```bash
-    git clone https://github.com/your-org/regintel-compliance-suite.git
-    cd RegIntel-Compliance-Suite
+    git clone https://github.com/your-org/sarcastic-ai.git
+    cd sarcastic-ai
     ```
 
 2.  **Create Virtual Environment**
@@ -106,7 +106,7 @@ regintel-compliance-suite/
     ```
 
 4.  **Database Configuration**
-    Ensure PostgreSQL is running and create a database named `regintel_db`. application tables will be initialized automatically upon first run via SQLAlchemy (or execute `database/schema.sql` manually).
+    Ensure PostgreSQL is running and create a database named `sarcastic_ai_db`. application tables will be initialized automatically upon first run via SQLAlchemy (or execute `database/schema.sql` manually).
 
 5.  **Environment Configuration**
     Create a `.env` file in the root directory:
@@ -115,7 +115,7 @@ regintel-compliance-suite/
     DB_PASSWORD=your_postgres_password
     DB_HOST=localhost
     DB_PORT=5432
-    DB_NAME=regintel_db
+    DB_NAME=sarcastic_ai_db
     OLLAMA_MODEL=mistral
     CHROMA_PERSIST_DIR=./chroma_db
     ```
@@ -135,7 +135,7 @@ The system utilizes a relational schema optimized for referential integrity and 
 
 ## 8. Explainability & Compliance
 
-Regulatory trust is paramount. RegIntel addresses "Black Box" concerns through:
+Regulatory trust is paramount. SARcastic AI addresses "Black Box" concerns through:
 
 *   **Reasoning Traces**: The Logic Chain executed by the model is captured and presented to the analyst, showing how entities were resolved and which patterns triggered specific flags.
 *   **Source Citations**: Every generated claim regarding a violation (e.g., structuring) is backed by a specific citation from the embedded Knowledge Base (e.g., "31 CFR § 1010.100(xx)").
@@ -157,7 +157,7 @@ Regulatory trust is paramount. RegIntel addresses "Black Box" concerns through:
 
 ## 11. License
 
-Copyright (c) 2024 RegIntel Financial Systems.
+Copyright (c) 2024 SARcastic AI Financial Systems.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 

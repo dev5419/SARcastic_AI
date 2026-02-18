@@ -187,7 +187,7 @@ def seed_regulatory_knowledge_base():
 # Page Configuration
 # -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="RegIntel Compliance Suite",
+    page_title="SARcastic AI",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -239,7 +239,7 @@ def render_login():
 
     c1, c2, c3 = st.columns([1, 1, 1])
     with c2:
-        st.markdown('<div class="login-header"><div class="login-title">RegIntel Suite</div><div class="login-sub">Secure Professional Access</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="login-header"><div class="login-title">SARcastic AI</div><div class="login-sub">Secure Professional Access</div></div>', unsafe_allow_html=True)
         with st.form("login_form"):
             email = st.text_input("Email Address", placeholder="name@company.com")
             password = st.text_input("Password", type="password", placeholder="••••••••")
@@ -593,7 +593,7 @@ def render_dashboard():
     # Header & Export Actions
     h_c1, h_c2 = st.columns([2, 1])
     with h_c1:
-        st.title("Compliance Dashboard")
+        st.title("SARcastic AI Dashboard")
     with h_c2:
         st.markdown('<div style="display: flex; gap: 10px; justify-content: flex-end; align-items: center; height: 100%;">', unsafe_allow_html=True)
         report_text = generate_regulatory_report()

@@ -3,12 +3,12 @@ version: '3.8'
 services:
   postgres:
     image: postgres:15-alpine
-    container_name: regintel_postgres
+    container_name: sarcastic_postgres
     restart: always
     environment:
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-admin123}
-      POSTGRES_DB: ${DB_NAME:-sar_db}
+      POSTGRES_DB: ${DB_NAME:-sarcastic_ai_db}
     ports:
       - "5432:5432"
     volumes:
@@ -16,7 +16,7 @@ services:
 
   vector_db:
     image: chromadb/chroma:latest
-    container_name: regintel_chroma
+    container_name: sarcastic_chroma
     restart: always
     ports:
       - "8001:8000" # Host 8001 -> Container 8000
@@ -27,7 +27,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    container_name: regintel_backend
+    container_name: sarcastic_backend
     restart: always
     ports:
       - "8000:8000"
@@ -36,7 +36,7 @@ services:
       - DB_PORT=5432
       - DB_USER=${DB_USER:-postgres}
       - DB_PASSWORD=${DB_PASSWORD:-admin123}
-      - DB_NAME=${DB_NAME:-sar_db}
+      - DB_NAME=${DB_NAME:-sarcastic_ai_db}
       - CHROMA_SERVER_HOST=vector_db
       - CHROMA_SERVER_PORT=8000
       - OLLAMA_HOST=http://host.docker.internal:11434
@@ -52,7 +52,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.frontend
-    container_name: regintel_frontend
+    container_name: sarcastic_frontend
     restart: always
     ports:
       - "8501:8501"

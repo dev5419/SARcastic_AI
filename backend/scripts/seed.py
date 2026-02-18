@@ -57,16 +57,16 @@ def seed():
         # 3. Seed Users (10)
         print("Seeding users...")
         users = [
-            ("admin@regintel.com", "admin123", "Compliance Head"),
-            ("sarah@regintel.com", "sarah123", "Analyst"),
-            ("mike@regintel.com", "mike123", "Reviewer"),
-            ("jane@regintel.com", "jane123", "MLRO"),
-            ("david@regintel.com", "david123", "Analyst"),
-            ("emma@regintel.com", "emma123", "Analyst"), 
-            ("lucas@regintel.com", "lucas123", "Reviewer"),
-            ("system@regintel.com", "system", "System"),
-            ("testinfo@regintel.com", "test1234", "Analyst"),
-            ("auditor@regintel.com", "audit123", "Auditor")
+            ("admin@sarcastic.ai", "admin123", "Compliance Head"),
+            ("sarah@sarcastic.ai", "sarah123", "Analyst"),
+            ("mike@sarcastic.ai", "mike123", "Reviewer"),
+            ("jane@sarcastic.ai", "jane123", "MLRO"),
+            ("david@sarcastic.ai", "david123", "Analyst"),
+            ("emma@sarcastic.ai", "emma123", "Analyst"), 
+            ("lucas@sarcastic.ai", "lucas123", "Reviewer"),
+            ("system@sarcastic.ai", "system", "System"),
+            ("testinfo@sarcastic.ai", "test1234", "Analyst"),
+            ("auditor@sarcastic.ai", "audit123", "Auditor")
         ]
         
         user_ids = []

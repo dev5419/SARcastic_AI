@@ -11,7 +11,7 @@ from services.sar_service import (
 )
 from services.audit_service import save_audit_log
 
-st.set_page_config(page_title="SAR Narrative Generator")
+st.set_page_config(page_title="SARcastic AI Narrative Generator")
 
 # ---------------------------------------------
 # Session Storage
@@ -27,7 +27,7 @@ if "sar_id" not in st.session_state:
 # ---------------------------------------------
 if not st.session_state.user:
 
-    st.title("🔐 SAR System Login")
+    st.title("🔐 SARcastic AI Login")
 
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")

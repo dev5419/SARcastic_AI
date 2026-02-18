@@ -274,7 +274,7 @@ def generate_regulatory_report():
     SAR ACTIVITY REVIEW - AUTOMATED GENERATION
     =========================================================
     GENERATED ON: {timestamp}
-    REPORTING ENTITY: RegIntel Compliance Suite
+    REPORTING ENTITY: SARcastic AI
     
     ---------------------------------------------------------
     EXECUTIVE SUMMARY
