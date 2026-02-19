@@ -1169,7 +1169,7 @@ def render_sar_report_page():
         with st.form("part_a_form"):
             col1, col2 = st.columns(2)
             with col1:
-                entity_name = st.text_input("Reporting Entity Name", value=part_a.get('entity_name', 'RegIntel Financial Services'))
+                entity_name = st.text_input("Reporting Entity Name", value=part_a.get('entity_name', 'SARcastic AI Financial Services'))
                 reg_number = st.text_input("Registration Number", value=part_a.get('reg_number', ''))
                 business_type = st.selectbox("Nature of Business", ["Bank", "FinTech", "Casino", "Dealer", "Other"], index=0)
             with col2:
@@ -1340,7 +1340,7 @@ def main():
 
     load_design_system()
     with st.sidebar:
-        st.markdown('<div style="font-size: 1.2rem; font-weight: 700; color: #C9A227; margin-bottom: 20px;">RegIntel Suite</div>', unsafe_allow_html=True)
+        st.markdown('<div style="font-size: 1.2rem; font-weight: 700; color: #C9A227; margin-bottom: 20px;">SARcastic AI</div>', unsafe_allow_html=True)
         st.caption(f"User: {st.session_state.user_email}")
         st.caption(f"Role: {st.session_state.get('user_role', 'Analyst')}")
         if st.button("Dashboard", use_container_width=True): st.session_state.page = "Dashboard"; st.rerun()

@@ -176,11 +176,7 @@ def get_all_cases(limit=100):
         result = connection.execute(
             text("""
                 SELECT id, customer_name, status, created_at, analyst_id, generated_narrative,
-                       CASE 
-                           WHEN status = 'Approved' THEN 'Low'
-                           WHEN status = 'Pending Review' THEN 'Medium'
-                           ELSE 'High'
-                       END as risk_level
+                       COALESCE(risk_level, 'Medium') as risk_level
                 FROM sar_cases
                 ORDER BY created_at DESC
                 LIMIT :limit

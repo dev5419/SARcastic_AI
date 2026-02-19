@@ -41,7 +41,16 @@ def seed():
                 generated_narrative TEXT,
                 edited_narrative TEXT,
                 status VARCHAR(50),
+                risk_level VARCHAR(20) DEFAULT 'Medium',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE sar_cases_audit (
+                 id SERIAL PRIMARY KEY,
+                 case_id INT,
+                 action VARCHAR(255),
+                 changed_by INT,
+                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
             CREATE TABLE audit_logs (
@@ -83,9 +92,12 @@ def seed():
         # We'll just create 30 cases directly, representing converted alerts.
         print("Seeding cases...")
         statuses = ["Open", "Review", "Pending Review", "Approved", "Filed", "Closed", "Draft"]
+        risk_levels = ["High", "Medium", "Low", "Critical"]
         
         for i in range(30):
             status = random.choice(statuses)
+            risk = random.choice(risk_levels)
+
             # Override for specific counts requested
             if i < 5: status = "Draft"
             elif i < 7: status = "Filed"
@@ -103,8 +115,8 @@ def seed():
             res = conn.execute(
                 text("""
                     INSERT INTO sar_cases 
-                    (analyst_id, customer_name, kyc_data, transaction_data, generated_narrative, status, created_at)
-                    VALUES (:aid, :cust, :kyc, :tx, :nar, :stat, :cat)
+                    (analyst_id, customer_name, kyc_data, transaction_data, generated_narrative, status, risk_level, created_at)
+                    VALUES (:aid, :cust, :kyc, :tx, :nar, :stat, :risk, :cat)
                     RETURNING id
                 """),
                 {
@@ -114,6 +126,7 @@ def seed():
                     "tx": tx,
                     "nar": narrative,
                     "stat": status,
+                    "risk": risk,
                     "cat": created_at
                 }
             )
